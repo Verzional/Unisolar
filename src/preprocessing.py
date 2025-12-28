@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+import re
+from typing import List
 
 
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
@@ -8,7 +10,7 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna(subset=["SolarGeneration"])
     print(f"Dropped {initial_rows - len(df)} rows with missing Target.")
 
-    # 2. Handle Missing Weather Data (Linear Interpolation for small gaps)
+    # 2. Handle Missing Weather Data (Linear Interpolation)
     weather_cols = [
         "ApparentTemperature",
         "AirTemperature",
@@ -18,21 +20,23 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
         "WindDirection",
     ]
 
-    # Check if columns exist before processing
     existing_weather_cols = [c for c in weather_cols if c in df.columns]
-    df[existing_weather_cols] = df[existing_weather_cols].interpolate(
+    df.loc[:, existing_weather_cols] = df[existing_weather_cols].interpolate(
         method="linear", limit_direction="both"
     )
 
-    # 3. Handle Negative Solar Generation (Sensor errors)
-    # Clip negative values to 0
-    df["SolarGeneration"] = df["SolarGeneration"].clip(lower=0)
+    # 3. Clip Negative Solar Generation Values to Zero
+    df.loc[:, "SolarGeneration"] = df["SolarGeneration"].clip(lower=0)
+
+    # 4. Change Null Optimizer Values to 'None'
+    if "Optimizers" in df.columns:
+        df.loc[:, "Optimizers"] = df["Optimizers"].fillna("None")
 
     return df
 
 
 def filter_valid_sites(df: pd.DataFrame) -> pd.DataFrame:
-    # Remove sites with missing kWp capacity
+    # Remove Sites with Missing kWp Capacity
     missing_kwp = df["kWp"].isnull().sum()
     if missing_kwp > 0:
         print(f"\nDropping {missing_kwp} rows with missing 'kWp' capacity data.")
@@ -44,7 +48,7 @@ def filter_valid_sites(df: pd.DataFrame) -> pd.DataFrame:
 def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    # Ensure Timestamp is in datetime Format
+    # Format Timestamp to Datetime
     if not pd.api.types.is_datetime64_any_dtype(df["Timestamp"]):
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
 
@@ -58,10 +62,59 @@ def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     df["IsDaylight"] = (df["Hour"] >= 6) & (df["Hour"] <= 20)
 
     # Encode Cyclical Features
-    df["hour_sin"] = np.sin(2 * np.pi * df["Hour"] / 24)
-    df["hour_cos"] = np.cos(2 * np.pi * df["Hour"] / 24)
+    df["HourSin"] = np.sin(2 * np.pi * df["Hour"] / 24)
+    df["HourCos"] = np.cos(2 * np.pi * df["Hour"] / 24)
 
-    df["month_sin"] = np.sin(2 * np.pi * df["Month"] / 12)
-    df["month_cos"] = np.cos(2 * np.pi * df["Month"] / 12)
+    df["MonthSin"] = np.sin(2 * np.pi * df["Month"] / 12)
+    df["MonthCos"] = np.cos(2 * np.pi * df["Month"] / 12)
+    return df
+
+
+def get_distinct_values(df: pd.DataFrame, columns: List[str]):
+    for column in columns:
+        if column in df.columns:
+            distinct_values = df[column].dropna().unique().tolist()
+            print(f"Distinct values in '{column}': {distinct_values}")
+        else:
+            print(f"Column '{column}' does not exist in the DataFrame.")
+
+
+def extract_hardware_specs(df):
+    df = df.copy()
+
+    # 1. Panels: Extract Wattage Rating
+    def get_panel_watts(name):
+        if pd.isna(name) or name == "TBD":
+            return 330.0
+        if "435" in str(name):
+            return 435.0
+        match = re.search(r"(\d+)W", str(name))
+        return float(match.group(1)) if match else 330.0
+
+    df["PanelRatingW"] = df["Panel"].apply(get_panel_watts)
+
+    # 2. Inverters: Total Capacity in kW
+    def get_inv_cap(name):
+        if pd.isna(name):
+            return 0.0
+        name_str = str(name)
+
+        # Handle Multiple Inverters
+        matches = re.findall(r"(\d+)\s*[xX]\s*.*?(\d+\.?\d*)K?", name_str)
+        total = sum(float(count) * float(rating) for count, rating in matches)
+        return total
+
+    df["TotalInverterKW"] = df["Inverter"].apply(get_inv_cap)
+
+    # 3. Optimizers: Count
+    df["OptimizerCount"] = (
+        df["Optimizers"]
+        .astype(str)
+        .str.extract(r"(\d+)", expand=False)
+        .astype(float)
+        .fillna(0)
+    )
+
+    print(f"\nExtracted hardware specs: PanelRatingW, TotalInverterKW, OptimizerCount")
 
     return df
