@@ -5,6 +5,8 @@ from typing import List
 
 
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
     # 1. Drop Rows with Missing Target Variable (SolarGeneration)
     initial_rows = len(df)
     df = df.dropna(subset=["SolarGeneration"])
@@ -21,7 +23,7 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
     existing_weather_cols = [c for c in weather_cols if c in df.columns]
-    df.loc[:, existing_weather_cols] = df[existing_weather_cols].interpolate(
+    df.loc[:, existing_weather_cols] = df.loc[:, existing_weather_cols].interpolate(
         method="linear", limit_direction="both"
     )
 
@@ -31,6 +33,10 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     # 4. Change Null Optimizer Values to 'None'
     if "Optimizers" in df.columns:
         df.loc[:, "Optimizers"] = df["Optimizers"].fillna("None")
+
+    # 5. Number of Panels Cleanup
+    if "Number of panels" in df.columns:
+        df.rename(columns={"Number of panels": "NumberOfPanels"}, inplace=True)
 
     return df
 

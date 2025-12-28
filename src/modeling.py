@@ -17,7 +17,7 @@ def split_data(df: pd.DataFrame, target_col: str, test_size: float):
         "WindSpeed",
         "WindDirection",
         "kWp",
-        "Number of panels",
+        "NumberOfPanels",
         "PanelRatingW",
         "TotalInverterKW",
         "OptimizerCount",
