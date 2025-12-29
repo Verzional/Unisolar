@@ -10,23 +10,52 @@ def split_data(df: pd.DataFrame, target_col: str, test_size: float):
     # Sort by Timestamp
     df = df.sort_values(by="Timestamp").reset_index(drop=True)
 
-    # Define Features and Target
+    # Define Features and Target 
     feature_cols = [
+        # Weather Features
         "AirTemperature",
         "RelativeHumidity",
         "WindSpeed",
         "WindDirection",
+        
+        # System Specifications
         "kWp",
         "NumberOfPanels",
         "PanelRatingW",
         "TotalInverterKW",
         "OptimizerCount",
+        
+        # Time Features
         "Hour",
         "Month",
         "DayOfYear",
         "IsDaylight",
+        "HourSin",
+        "HourCos",
+        "MonthSin",
+        "MonthCos",
+        "Season",
+        
+        # Solar Position Features
+        "SolarElevation",
+        
+        # Temperature-Based Features
+        "TempDeviation",
+        "HighTempPenalty",
+        "TempDewSpread",
+        
+        # Weather Interaction Features
+        "HumidityTemp",
+        "WindCoolingEffect",
+        
+        # System Efficiency Ratios
+        "AvgPanelKW",
+        "InverterPanelRatio",
+        "OptimizerCoverage",
     ]
-
+    
+    feature_cols = [col for col in feature_cols if col in df.columns]
+    
     X = df[feature_cols]
     y = df[target_col]
 
@@ -50,14 +79,14 @@ def train_model(X_train, y_train):
     }
 
     # Time Series Cross-Validation
-    tscv = TimeSeriesSplit(n_splits=3)
+    tscv = TimeSeriesSplit(n_splits=5)
 
     model = LGBMRegressor(random_state=42, n_jobs=-1, verbose=-1)
 
     search = RandomizedSearchCV(
         model,
         param_distributions=param_dist,
-        n_iter=5,
+        n_iter=20,
         scoring="neg_mean_absolute_error",
         cv=tscv,
         verbose=1,

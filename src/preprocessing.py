@@ -54,35 +54,78 @@ def filter_valid_sites(df: pd.DataFrame) -> pd.DataFrame:
 def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    # Format Timestamp to Datetime
+    # 1. Format Timestamp to Datetime
     if not pd.api.types.is_datetime64_any_dtype(df["Timestamp"]):
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
 
-    # Extract Standard Time Features
+    # 2. Extract Standard Time Features
     df["Hour"] = df["Timestamp"].dt.hour
     df["Month"] = df["Timestamp"].dt.month
     df["DayOfYear"] = df["Timestamp"].dt.dayofyear
     df["Year"] = df["Timestamp"].dt.year
 
-    # Day / Night Indicator
+    # 3. Day / Night Indicator
     df["IsDaylight"] = (df["Hour"] >= 6) & (df["Hour"] <= 20)
 
-    # Encode Cyclical Features
+    # 4. Encode Cyclical Features
     df["HourSin"] = np.sin(2 * np.pi * df["Hour"] / 24)
     df["HourCos"] = np.cos(2 * np.pi * df["Hour"] / 24)
 
     df["MonthSin"] = np.sin(2 * np.pi * df["Month"] / 12)
     df["MonthCos"] = np.cos(2 * np.pi * df["Month"] / 12)
+
+    # 5. Solar Elevation Feature
+    if "lat" in df.columns and "Lon" in df.columns:
+        df["SolarElevation"] = calculate_solar_elevation(
+            df["lat"], df["Lon"], df["Timestamp"]
+        )
+
+        df["SolarElevation"] = df["SolarElevation"].clip(lower=0)
+
+    # 6. Temperature-Based Features
+    if "AirTemperature" in df.columns:
+        # Temperature Deviation from Optimal (25°C)
+        df["TempDeviation"] = (df["AirTemperature"] - 25).abs()
+
+        # High Temperature Penalty (above 25°C)
+        df["HighTempPenalty"] = (df["AirTemperature"] - 25).clip(lower=0)
+
+    if "DewPointTemperature" in df.columns and "AirTemperature" in df.columns:
+        # Temperature Dew Spread
+        df["TempDewSpread"] = df["AirTemperature"] - df["DewPointTemperature"]
+
+    # 7. Weather Interaction Features
+    if "RelativeHumidity" in df.columns and "AirTemperature" in df.columns:
+        # Hight Humidity & Temperature Interaction (Cloud / Haze Effect)
+        df["HumidityTemp"] = df["RelativeHumidity"] * df["AirTemperature"] / 100
+
+    if "WindSpeed" in df.columns and "AirTemperature" in df.columns:
+        # Wind Speed & Temperature Interaction (Cooling Effect)
+        df["WindCoolingEffect"] = df["WindSpeed"] * df["AirTemperature"]
+
+    # 8. System Efficiency Ratios
+    if "kWp" in df.columns and "NumberOfPanels" in df.columns:
+        # Average Panel kW Rating
+        df["AvgPanelKW"] = df["kWp"] / (df["NumberOfPanels"] + 0.001)
+
+    if "TotalInverterKW" in df.columns and "kWp" in df.columns:
+        # Inverter to Panel Capacity Ratio
+        df["InverterPanelRatio"] = df["TotalInverterKW"] / (df["kWp"] + 0.001)
+
+    if "OptimizerCount" in df.columns and "NumberOfPanels" in df.columns:
+        # Optimizer Coverage (Percentage of Panels with Optimizers)
+        df["OptimizerCoverage"] = df["OptimizerCount"] / (df["NumberOfPanels"] + 0.001)
+
+    # 9. Seasonal Features
+    df["Season"] = df["Month"].apply(
+        lambda x: (
+            0
+            if x in [12, 1, 2]  # Summer
+            else 1 if x in [3, 4, 5] else 2 if x in [6, 7, 8] else 3  # Autumn  # Winter
+        )  # Spring
+    )
+
     return df
-
-
-def get_distinct_values(df: pd.DataFrame, columns: List[str]):
-    for column in columns:
-        if column in df.columns:
-            distinct_values = df[column].dropna().unique().tolist()
-            print(f"Distinct values in '{column}': {distinct_values}")
-        else:
-            print(f"Column '{column}' does not exist in the DataFrame.")
 
 
 def extract_hardware_specs(df):
@@ -124,3 +167,41 @@ def extract_hardware_specs(df):
     print(f"\nExtracted hardware specs: PanelRatingW, TotalInverterKW, OptimizerCount")
 
     return df
+
+
+def calculate_solar_elevation(lat, lon, timestamp):
+    lat = np.array(lat)
+    lon = np.array(lon)
+
+    # 1. Extract Time Components
+    hour = timestamp.dt.hour + timestamp.dt.minute / 60
+    day_of_year = timestamp.dt.dayofyear
+
+    # 2. Calculate Solar Elevation Angle
+    declination = 23.45 * np.sin(np.radians(360 / 365 * (day_of_year - 81)))
+
+    # 3. Hour Angle
+    hour_angle = 15 * (hour - 12)
+
+    # 4. Solar Elevation Calculation
+    lat_rad = np.radians(lat)
+    dec_rad = np.radians(declination)
+    hour_rad = np.radians(hour_angle)
+
+    elevation = np.degrees(
+        np.arcsin(
+            np.sin(lat_rad) * np.sin(dec_rad)
+            + np.cos(lat_rad) * np.cos(dec_rad) * np.cos(hour_rad)
+        )
+    )
+
+    return elevation
+
+
+def get_distinct_values(df: pd.DataFrame, columns: List[str]):
+    for column in columns:
+        if column in df.columns:
+            distinct_values = df[column].dropna().unique().tolist()
+            print(f"Distinct values in '{column}': {distinct_values}")
+        else:
+            print(f"Column '{column}' does not exist in the DataFrame.")
