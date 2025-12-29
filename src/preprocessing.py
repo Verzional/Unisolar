@@ -51,6 +51,47 @@ def filter_valid_sites(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def extract_hardware_specs(df):
+    df = df.copy()
+
+    # 1. Panels: Extract Wattage Rating
+    def get_panel_watts(name):
+        if pd.isna(name) or name == "TBD":
+            return 330.0
+        if "435" in str(name):
+            return 435.0
+        match = re.search(r"(\d+)W", str(name))
+        return float(match.group(1)) if match else 330.0
+
+    df["PanelRatingW"] = df["Panel"].apply(get_panel_watts)
+
+    # 2. Inverters: Total Capacity in kW
+    def get_inv_cap(name):
+        if pd.isna(name):
+            return 0.0
+        name_str = str(name)
+
+        # Handle Multiple Inverters
+        matches = re.findall(r"(\d+)\s*[xX]\s*.*?(\d+\.?\d*)K?", name_str)
+        total = sum(float(count) * float(rating) for count, rating in matches)
+        return total
+
+    df["TotalInverterKW"] = df["Inverter"].apply(get_inv_cap)
+
+    # 3. Optimizers: Count
+    df["OptimizerCount"] = (
+        df["Optimizers"]
+        .astype(str)
+        .str.extract(r"(\d+)", expand=False)
+        .astype(float)
+        .fillna(0)
+    )
+
+    print(f"\nExtracted hardware specs: PanelRatingW, TotalInverterKW, OptimizerCount")
+
+    return df
+
+
 def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
@@ -128,43 +169,65 @@ def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def extract_hardware_specs(df):
+def remove_outliers(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    # 1. Panels: Extract Wattage Rating
-    def get_panel_watts(name):
-        if pd.isna(name) or name == "TBD":
-            return 330.0
-        if "435" in str(name):
-            return 435.0
-        match = re.search(r"(\d+)W", str(name))
-        return float(match.group(1)) if match else 330.0
+    initial_rows = len(df)
 
-    df["PanelRatingW"] = df["Panel"].apply(get_panel_watts)
+    # 1. Remove Nighttime Generation Values (SolarElevation <= 0)
+    if "SolarElevation" in df.columns:
+        night_mask = df["SolarElevation"] <= 0
+        df.loc[night_mask, "SolarGeneration"] = df.loc[
+            night_mask, "SolarGeneration"
+        ].clip(upper=0.01)
+        print(f"Capped {night_mask.sum()} nighttime generation values")
 
-    # 2. Inverters: Total Capacity in kW
-    def get_inv_cap(name):
-        if pd.isna(name):
-            return 0.0
-        name_str = str(name)
+    # 2. Remove Physically Impossible Generation Values (Beyond 120% of kWp)
+    if "kWp" in df.columns:
+        theoretical_max = df["kWp"] * 1.2
+        impossible_mask = df["SolarGeneration"] > theoretical_max
+        impossible_count = impossible_mask.sum()
 
-        # Handle Multiple Inverters
-        matches = re.findall(r"(\d+)\s*[xX]\s*.*?(\d+\.?\d*)K?", name_str)
-        total = sum(float(count) * float(rating) for count, rating in matches)
-        return total
+        if impossible_count > 0:
+            print(
+                f"Removing {impossible_count} rows with physically impossible generation (>{theoretical_max.max():.2f} kWh)"
+            )
+            df = df[~impossible_mask]
 
-    df["TotalInverterKW"] = df["Inverter"].apply(get_inv_cap)
+    # 3. Remove Statistical Outliers Using IQR Method (Per Site)
+    if "SiteKey" in df.columns:
 
-    # 3. Optimizers: Count
-    df["OptimizerCount"] = (
-        df["Optimizers"]
-        .astype(str)
-        .str.extract(r"(\d+)", expand=False)
-        .astype(float)
-        .fillna(0)
+        def remove_site_outliers(group):
+            # Only Check Daylight Data
+            daylight = (
+                group[group["SolarElevation"] > 0]
+                if "SolarElevation" in group.columns
+                else group
+            )
+
+            if len(daylight) < 10:
+                return group
+
+            Q1 = daylight["SolarGeneration"].quantile(0.25)
+            Q3 = daylight["SolarGeneration"].quantile(0.75)
+            IQR = Q3 - Q1
+
+            # Remove Outliers Beyond 3 * IQR
+            lower_bound = Q1 - 3 * IQR
+            upper_bound = Q3 + 3 * IQR
+
+            outlier_mask = (group["SolarGeneration"] < lower_bound) | (
+                group["SolarGeneration"] > upper_bound
+            )
+            return group[~outlier_mask]
+
+        df = df.groupby("SiteKey", group_keys=False).apply(remove_site_outliers, include_groups=False)
+        df = df.reset_index(drop=True)
+
+    rows_removed = initial_rows - len(df)
+    print(
+        f"Total outliers removed: {rows_removed} ({rows_removed/initial_rows*100:.2f}%)"
     )
-
-    print(f"\nExtracted hardware specs: PanelRatingW, TotalInverterKW, OptimizerCount")
 
     return df
 

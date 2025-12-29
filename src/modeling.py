@@ -70,31 +70,56 @@ def split_data(df: pd.DataFrame, target_col: str, test_size: float):
 
 
 def train_model(X_train, y_train):
-    # Define Hyperparameter Grid
+    # Hyperparameter Grid
     param_dist = {
-        "num_leaves": [31, 50, 70],
+        # Tree Structure
+        "num_leaves": [31, 63, 100],
+        "max_depth": [10, 15, 20],
+        "min_child_samples": [20, 50, 100],
+        
+        # Learning
         "learning_rate": [0.01, 0.05, 0.1],
-        "n_estimators": [1000, 2000],
-        "max_depth": [-1, 10, 15],
+        "n_estimators": [500, 1000, 1500], 
+        
+        # Sampling 
+        "subsample": [0.8, 0.9, 1.0],
+        "subsample_freq": [1],
+        "colsample_bytree": [0.8, 0.9, 1.0],
+        
+        # Regularization 
+        "reg_alpha": [0, 0.1, 1],
+        "reg_lambda": [0, 0.1, 1],
     }
 
-    # Time Series Cross-Validation
-    tscv = TimeSeriesSplit(n_splits=5)
+    # CV Splitter
+    tscv = TimeSeriesSplit(n_splits=3)
 
-    model = LGBMRegressor(random_state=42, n_jobs=-1, verbose=-1)
+    # Model Initialization
+    model = LGBMRegressor(
+        random_state=42, 
+        n_jobs=-1, 
+        verbose=-1,
+        force_col_wise=True,
+        importance_type='gain',
+        boosting_type='gbdt',  
+    )
 
     search = RandomizedSearchCV(
         model,
         param_distributions=param_dist,
-        n_iter=20,
-        scoring="neg_mean_absolute_error",
+        n_iter=25,  
+        scoring="r2", 
         cv=tscv,
-        verbose=1,
+        verbose=2,
+        random_state=42,
+        n_jobs=-1,
+        error_score='raise',  
     )
 
     search.fit(X_train, y_train)
 
-    print(f"Best Params: {search.best_params_}")
+    print(f"\nBest Params: {search.best_params_}")
+    print(f"Best CV R2 Score: {search.best_score_:.4f}")
     print("\nTraining Complete.")
     
     return search.best_estimator_
