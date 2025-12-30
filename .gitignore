@@ -1,5 +1,7 @@
 /.venv/
 /src/__pycache__/
+/api/__pycache__/
 /data/raw/
 /data/processed/
 /models/
+.env

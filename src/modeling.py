@@ -1,14 +1,26 @@
-from lightgbm import LGBMRegressor
-from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
+from lightgbm import LGBMRegressor
 import pandas as pd
 import numpy as np
 import joblib
 
 
-def split_data(df: pd.DataFrame, target_col: str, test_size: float):
+def split_data(df: pd.DataFrame, target_col: str, test_size: float, daylight_only: bool = True):
     # Sort by Timestamp
     df = df.sort_values(by="Timestamp").reset_index(drop=True)
+    
+    # Filter to Daylight Hours 
+    if daylight_only and "SolarElevation" in df.columns:
+        initial_rows = len(df)
+        df = df[df["SolarElevation"] > 0].reset_index(drop=True)
+        print(f"Filtered to daylight hours: {initial_rows} -> {len(df)} rows ({len(df)/initial_rows*100:.1f}%)")
+    
+    # Create Capacity Factor target 
+    if "kWp" in df.columns:
+        df["CapacityFactor"] = df[target_col] / (df["kWp"] + 0.001)
+        df["CapacityFactor"] = df["CapacityFactor"].clip(0, 1.2)  
+        print(f"Created CapacityFactor target (SolarGeneration / kWp)")
 
     # Define Features and Target 
     feature_cols = [
@@ -21,15 +33,12 @@ def split_data(df: pd.DataFrame, target_col: str, test_size: float):
         # System Specifications
         "kWp",
         "NumberOfPanels",
-        "PanelRatingW",
         "TotalInverterKW",
-        "OptimizerCount",
         
         # Time Features
         "Hour",
         "Month",
         "DayOfYear",
-        "IsDaylight",
         "HourSin",
         "HourCos",
         "MonthSin",
@@ -41,7 +50,6 @@ def split_data(df: pd.DataFrame, target_col: str, test_size: float):
         
         # Temperature-Based Features
         "TempDeviation",
-        "HighTempPenalty",
         "TempDewSpread",
         
         # Weather Interaction Features
@@ -51,13 +59,18 @@ def split_data(df: pd.DataFrame, target_col: str, test_size: float):
         # System Efficiency Ratios
         "AvgPanelKW",
         "InverterPanelRatio",
-        "OptimizerCoverage",
     ]
     
     feature_cols = [col for col in feature_cols if col in df.columns]
     
     X = df[feature_cols]
-    y = df[target_col]
+    
+    # Use CapacityFactor as target if available
+    if "CapacityFactor" in df.columns:
+        y = df["CapacityFactor"]
+        print("Training on CapacityFactor (multiply predictions by kWp to get kWh)")
+    else:
+        y = df[target_col]
 
     # Calculate Split Index
     split_index = int(len(df) * (1 - test_size))
